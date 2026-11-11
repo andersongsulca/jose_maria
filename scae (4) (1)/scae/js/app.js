@@ -50,11 +50,25 @@ let currentRole = 'director';
 // ==================== 2. UTILIDADES ====================
 const $ = id => document.getElementById(id);
 const generateId = (prefix) => prefix + Date.now().toString(36).toUpperCase();
-const today = () => new Date().toISOString().split('T')[0];
-const formatDate = (dateStr) => new Date(dateStr).toLocaleDateString('es-PE', { year: 'numeric', month: 'long', day: 'numeric' });
+
+// ✅ CORREGIDO: Usa fecha local en lugar de UTC
+const today = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatDate = (dateStr) => {
+  const [year, month, day] = dateStr.split('-');
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString('es-PE', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
 const getInitials = (name) => name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
 
-// Toast Notifications (mejoradas)
+// Toast Notifications
 function showToast(message, type = 'success') {
   const container = $('toast-container');
   const icons = {
@@ -106,7 +120,6 @@ function closeModal() {
   $('modalContainer').innerHTML = '';
 }
 
-// Cerrar modal al hacer clic fuera
 $('modalContainer').addEventListener('click', (e) => {
   if (e.target === $('modalContainer')) closeModal();
 });
@@ -127,10 +140,8 @@ function handleLogin(e) {
   const btnText = $('btnLoginText');
   const btnIcon = $('btnLoginIcon');
   
-  // Evitar doble clic
   if (btn.disabled) return;
   
-  // Estado de carga
   btn.disabled = true;
   btnText.textContent = 'Verificando...';
   btnIcon.style.display = 'none';
@@ -148,7 +159,6 @@ function handleLogin(e) {
       showToast('Credenciales incorrectas o rol no coincide', 'error');
     }
     
-    // ✅ IMPORTANTE: Resetear el botón SIEMPRE
     btn.disabled = false;
     btnText.textContent = 'Iniciar Sesión';
     btnIcon.style.display = 'block';
@@ -160,14 +170,12 @@ function logout() {
   $('app').classList.remove('show');
   $('login').style.display = 'flex';
   
-  // ✅ Resetear formulario completamente
   $('email').value = '';
   $('password').value = '';
   $('btnLogin').disabled = false;
   $('btnLoginText').textContent = 'Iniciar Sesión';
   $('btnLoginIcon').style.display = 'block';
   
-  // Resetear rol a director
   selectRole('director');
   
   showToast('Sesión cerrada correctamente', 'info');
@@ -416,15 +424,275 @@ function renderDirectorView(view, container) {
   }
   
   else if (view === 'reportes') {
-    container.innerHTML = `
-      <div class="data-table-container" style="padding: 3rem; text-align: center;">
-        <svg viewBox="0 0 24 24" width="64" height="64" style="color: var(--neutral-300); margin-bottom: 1rem;"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
-        <h3 style="color: var(--neutral-700); margin-bottom: 0.5rem;">Módulo de Reportes</h3>
-        <p style="color: var(--neutral-500); max-width: 500px; margin: 0 auto 1.5rem;">Genera informes detallados de asistencia mensual, rendimiento académico y estadísticas de docentes.</p>
-        <button class="btn btn-primary" onclick="showToast('Generando reporte PDF...', 'info')">Descargar Reporte Mensual</button>
-      </div>
-    `;
+    renderReportesView(container);
   }
+}
+
+// ==================== SISTEMA DE REPORTES ENTERPRISE ====================
+function renderReportesView(container) {
+  const totalAsistencias = Object.keys(DB.attendance).length;
+  const presentes = Object.values(DB.attendance).filter(v => v === 'presente').length;
+  const tardanzas = Object.values(DB.attendance).filter(v => v === 'tardanza').length;
+  const ausentes = Object.values(DB.attendance).filter(v => v === 'ausente').length;
+  const pctPresente = totalAsistencias > 0 ? Math.round((presentes / totalAsistencias) * 100) : 0;
+  const pctTardanza = totalAsistencias > 0 ? Math.round((tardanzas / totalAsistencias) * 100) : 0;
+  const pctAusente = totalAsistencias > 0 ? Math.round((ausentes / totalAsistencias) * 100) : 0;
+  
+  const asistenciaPorCurso = {};
+  DB.courses.forEach(curso => {
+    const estudiantesCurso = DB.students.filter(s => s.curso === curso.code);
+    const asistenciasCurso = DB.students.filter(s => s.curso === curso.code)
+      .map(s => DB.attendance[`${s.id}_${today()}`]).filter(Boolean);
+    
+    asistenciaPorCurso[curso.code] = {
+      nombre: curso.name,
+      total: estudiantesCurso.length,
+      presentes: asistenciasCurso.filter(a => a === 'presente').length,
+      tardanzas: asistenciasCurso.filter(a => a === 'tardanza').length,
+      ausentes: asistenciasCurso.filter(a => a === 'ausente').length
+    };
+  });
+  
+  const docentesConAsistencias = DB.users.filter(u => u.role === 'docente').map(docente => {
+    const cursosDocente = DB.courses.filter(c => c.tutor === docente.id);
+    const totalAsistenciasDocente = cursosDocente.flatMap(curso => 
+      DB.students.filter(s => s.curso === curso.code)
+        .map(s => DB.attendance[`${s.id}_${today()}`])
+        .filter(Boolean)
+    ).length;
+    
+    return {
+      nombre: docente.name,
+      especialidad: docente.specialty || 'Sin especialidad',
+      asistencias: totalAsistenciasDocente
+    };
+  }).sort((a, b) => b.asistencias - a.asistencias);
+  
+  container.innerHTML = `
+    <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+      <div>
+        <h2 style="font-size: 24px; font-weight: 700; color: var(--neutral-900); margin-bottom: 0.25rem;">Reportes y Estadísticas</h2>
+        <p style="color: var(--neutral-500);">Año académico ${DB.settings.currentYear} · Generado: ${new Date().toLocaleString('es-PE')}</p>
+      </div>
+      <div style="display: flex; gap: 0.75rem;">
+        <button class="btn btn-secondary" onclick="filtrarReportes()">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>
+          Filtrar
+        </button>
+        <button class="btn btn-primary" onclick="exportarReportePDF()">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          Exportar PDF
+        </button>
+      </div>
+    </div>
+    
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-card-header">
+          <div class="stat-icon blue">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+          </div>
+        </div>
+        <div class="stat-value">${totalAsistencias}</div>
+        <div class="stat-label">Total Registros de Asistencia</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header">
+          <div class="stat-icon green">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+          </div>
+        </div>
+        <div class="stat-value">${pctPresente}%</div>
+        <div class="stat-label">Tasa de Asistencia (${presentes} presentes)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header">
+          <div class="stat-icon orange">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+          </div>
+        </div>
+        <div class="stat-value">${pctTardanza}%</div>
+        <div class="stat-label">Tardanzas (${tardanzas} registros)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header">
+          <div class="stat-icon red">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v4z"/></svg>
+          </div>
+        </div>
+        <div class="stat-value">${pctAusente}%</div>
+        <div class="stat-label">Ausentismo (${ausentes} ausentes)</div>
+      </div>
+    </div>
+    
+    <div class="data-table-container" style="margin-bottom: 1.5rem;">
+      <div class="table-header">
+        <h3 class="table-title">Asistencia por Curso - ${formatDate(today())}</h3>
+      </div>
+      <div style="padding: 1.5rem;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+          ${Object.entries(asistenciaPorCurso).map(([code, data]) => {
+            const pctAsistencia = data.total > 0 ? Math.round((data.presentes / data.total) * 100) : 0;
+            return `
+              <div style="background: var(--neutral-50); padding: 1rem; border-radius: var(--radius-lg); border: 1px solid var(--neutral-200);">
+                <div style="font-weight: 600; color: var(--neutral-900); margin-bottom: 0.5rem;">${data.nombre}</div>
+                <div style="font-size: 12px; color: var(--neutral-500); margin-bottom: 0.75rem;">${data.total} estudiantes</div>
+                <div style="height: 8px; background: var(--neutral-200); border-radius: var(--radius-full); overflow: hidden; margin-bottom: 0.5rem;">
+                  <div style="width: ${pctAsistencia}%; height: 100%; background: var(--success); transition: width 0.5s ease;"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px;">
+                  <span style="color: var(--success); font-weight: 600;">${data.presentes} P</span>
+                  <span style="color: var(--warning); font-weight: 600;">${data.tardanzas} T</span>
+                  <span style="color: var(--danger); font-weight: 600;">${data.ausentes} A</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+    
+    <div class="data-table-container" style="margin-bottom: 1.5rem;">
+      <div class="table-header">
+        <h3 class="table-title">Detalle de Asistencia - ${formatDate(today())}</h3>
+        <div class="search-box">
+          <svg viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <input type="text" placeholder="Buscar estudiante..." onkeyup="filterTable(this, 'tablaAsistencia')">
+        </div>
+      </div>
+      <div style="overflow-x: auto;">
+        <table class="data-table" id="tablaAsistencia">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Estudiante</th>
+              <th>DNI</th>
+              <th>Curso</th>
+              <th>Apoderado</th>
+              <th>Estado</th>
+              <th>Hora Registro</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${DB.students.map(estudiante => {
+              const asistencia = DB.attendance[`${estudiante.id}_${today()}`];
+              const curso = DB.courses.find(c => c.code === estudiante.curso);
+              const apoderado = DB.users.find(u => u.id === estudiante.apoderadoId);
+              const horaRegistro = asistencia ? '07:45' : '-';
+              
+              return `
+                <tr>
+                  <td><strong>${estudiante.id}</strong></td>
+                  <td>${estudiante.name}</td>
+                  <td>${estudiante.dni}</td>
+                  <td><span class="badge badge-neutral">${curso ? curso.name : estudiante.curso}</span></td>
+                  <td>${apoderado ? apoderado.name : '<span style="color:var(--neutral-400)">Sin asignar</span>'}</td>
+                  <td>
+                    ${asistencia ? `
+                      <span class="badge ${asistencia === 'presente' ? 'badge-success' : asistencia === 'tardanza' ? 'badge-warning' : 'badge-danger'}">
+                        ${asistencia === 'presente' ? 'Presente' : asistencia === 'tardanza' ? 'Tardanza' : 'Ausente'}
+                      </span>
+                    ` : '<span style="color:var(--neutral-400)">Sin registrar</span>'}
+                  </td>
+                  <td style="font-family: monospace; color: var(--neutral-600);">${horaRegistro}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <div class="data-table-container">
+      <div class="table-header">
+        <h3 class="table-title">Docentes - Asistencias Registradas Hoy</h3>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Docente</th>
+            <th>Especialidad</th>
+            <th>Asistencias Registradas</th>
+            <th>Desempeño</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${docentesConAsistencias.map((docente, index) => `
+            <tr>
+              <td><strong style="color: ${index < 3 ? 'var(--primary)' : 'var(--neutral-600)'}">#${index + 1}</strong></td>
+              <td><strong>${docente.nombre}</strong></td>
+              <td>${docente.especialidad}</td>
+              <td><span class="badge ${docente.asistencias > 5 ? 'badge-success' : docente.asistencias > 2 ? 'badge-warning' : 'badge-neutral'}">${docente.asistencias} registros</span></td>
+              <td>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <div style="flex: 1; height: 6px; background: var(--neutral-200); border-radius: var(--radius-full); overflow: hidden;">
+                    <div style="width: ${Math.min(docente.asistencias * 10, 100)}%; height: 100%; background: ${docente.asistencias > 5 ? 'var(--success)' : docente.asistencias > 2 ? 'var(--warning)' : 'var(--neutral-400)'};"></div>
+                  </div>
+                  <span style="font-size: 12px; font-weight: 600; color: var(--neutral-600);">${Math.min(docente.asistencias * 10, 100)}%</span>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function filtrarReportes() {
+  showToast('Filtros avanzados disponibles en próxima actualización', 'info');
+}
+
+function exportarReportePDF() {
+  showToast('Generando reporte...', 'info');
+  
+  setTimeout(() => {
+    const contenido = `
+REPORTE DE ASISTENCIA ESCOLAR
+${DB.settings.schoolName} - Huaccana
+Fecha: ${formatDate(today())}
+Generado: ${new Date().toLocaleString('es-PE')}
+
+=====================================
+RESUMEN EJECUTIVO
+=====================================
+Total de Docentes: ${DB.users.filter(u => u.role === 'docente').length}
+Total de Estudiantes: ${DB.students.length}
+Total de Registros de Asistencia: ${Object.keys(DB.attendance).length}
+
+=====================================
+ESTADÍSTICAS DE ASISTENCIA
+=====================================
+Presentes: ${Object.values(DB.attendance).filter(v => v === 'presente').length}
+Tardanzas: ${Object.values(DB.attendance).filter(v => v === 'tardanza').length}
+Ausentes: ${Object.values(DB.attendance).filter(v => v === 'ausente').length}
+
+=====================================
+DETALLE POR ESTUDIANTE
+=====================================
+${DB.students.map(s => {
+  const asistencia = DB.attendance[`${s.id}_${today()}`] || 'Sin registrar';
+  return `${s.id} - ${s.name} (${s.curso}): ${asistencia.toUpperCase()}`;
+}).join('\n')}
+
+=====================================
+Este reporte fue generado automáticamente por el sistema SCAE
+=====================================
+    `;
+    
+    const blob = new Blob([contenido], { type: 'text/plain;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Reporte_Asistencia_${today()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    showToast('Reporte descargado exitosamente', 'success');
+  }, 1500);
 }
 
 // ==================== 6. CRUD DOCENTES ====================
@@ -740,7 +1008,6 @@ function loadStudentsForAttendance() {
   
   listDiv.innerHTML = html;
   
-  // Aplicar colores iniciales
   document.querySelectorAll('.att-select').forEach(updateAttColor);
 }
 
@@ -878,7 +1145,10 @@ function renderParentView(view, container) {
               for (let i = 0; i < 7; i++) {
                 const d = new Date();
                 d.setDate(d.getDate() - i);
-                dates.push(d.toISOString().split('T')[0]);
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                dates.push(`${year}-${month}-${day}`);
               }
               
               myChildren.forEach(child => {
